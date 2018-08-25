@@ -1,0 +1,7 @@
+[package]
+name = "cargo-cdo"
+version = "0.1.0"
+authors = ["Nikola Plejic <nikola@plejic.com>"]
+
+[dependencies]
+toml = "0.4"
