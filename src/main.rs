@@ -1,76 +1,113 @@
+#[macro_use]
+extern crate serde_derive;
+extern crate serde;
 extern crate toml;
 
 use std::fs::File;
-use std::io::{Error, ErrorKind};
 use std::io::prelude::*;
-use std::collections::{HashMap, BTreeMap};
+use std::collections::HashMap;
 
-use toml::Value;
+#[derive(Deserialize, Debug)]
+struct CargoWorkspace {
+    workspace: Workspace,
+}
 
-fn load_toml(filename: &str) -> Value {
-    let mut toml_file = File::open(filename).unwrap();
+#[derive(Deserialize, Debug)]
+struct Workspace {
+    members: Vec<String>,
+}
+
+#[derive(Deserialize, Debug)]
+struct CargoCrate {
+    package: Package,
+    dependencies: HashMap<String, toml::Value>,
+}
+
+#[derive(Deserialize, Debug)]
+struct Package {
+    name: String,
+    version: String,
+}
+
+#[derive(Debug)]
+struct DependencyEntry {
+    project: String,
+    version: String,
+}
+
+type DependencyMap = HashMap<String, Vec<DependencyEntry>>;
+
+fn load_toml(filename: &str) -> Result<String, std::io::Error> {
+    let mut toml_file = File::open(filename)?;
     let mut toml_str = String::new();
 
-    toml_file.read_to_string(&mut toml_str).unwrap();
+    toml_file.read_to_string(&mut toml_str)?;
 
-    toml_str.parse::<Value>().unwrap()
+    Ok(toml_str.to_string())
 }
 
 fn main() -> std::io::Result<()> {
-    let workspace_toml = load_toml("Cargo.toml");
-    let workspace_toml = workspace_toml.as_table().unwrap();
+    let mut dm = DependencyMap::new();
 
-    if !workspace_toml.contains_key("workspace") {
-        return Err(Error::new(ErrorKind::Other, "Not in a workspace!"));
-    }
+    let toml_str = load_toml("Cargo.toml").expect("No Cargo.toml file found.");
 
-    let workspace = workspace_toml.get("workspace").unwrap();
-    let members = match workspace.get("members") {
-        Some(members) => members.as_array().unwrap(),
-        None          => panic!("No members in the workspace, exiting...")
+    let tl_workspace : CargoWorkspace = match toml::from_str(&toml_str) {
+        Ok(ws) => ws,
+        _      => panic!("Malformed Cargo.toml -- are you in a workspace?")
     };
+    let workspace = tl_workspace.workspace;
 
-    let mut member_dependencies = HashMap::new();
+    for member in workspace.members {
+        let crate_str = load_toml(&format!("{}/Cargo.toml", member))
+            .expect("No Cargo.toml file found.");
 
-    for member in members {
-        let member_str = member.as_str().unwrap();
-
-        let crate_toml = load_toml(
-            &format!("{}/Cargo.toml", member_str)
-        );
-        let crate_toml = crate_toml.as_table().unwrap();
-
-        let empty_deps = BTreeMap::new();
-        let deps = match crate_toml.get("dependencies") {
-            Some(deps) => deps.as_table().unwrap(),
-            None       => &empty_deps
+        let member_toml : CargoCrate = match toml::from_str(&crate_str) {
+            Ok(member) => member,
+            _          => panic!("Malformed Cargo.toml")
         };
 
-        let mut deps_v = Vec::new();
+        for (name, version) in member_toml.dependencies {
+            let version = match version {
+                toml::Value::String(ver) => ver,
+                toml::Value::Table(tbl) => {
+                    match tbl.get("version") {
+                        Some(toml::Value::String(ver)) => ver.to_string(),
+                        _ => "".to_string()
+                    }
+                }
+                _ => "".to_string()
+            };
 
-        for key in deps.keys() {
-            let version = deps.get(key).unwrap();
+            let entry = DependencyEntry {
+                project: member.to_string(),
+                version: version.to_string()
+            };
 
-            if version.is_str() {
-                deps_v.push((key.to_owned(), version.as_str().unwrap().to_owned()));
+            dm.entry(name)
+                .or_insert(vec![])
+                .push(entry);
+        }
+    }
+
+    let repeating_deps : DependencyMap =
+        dm.into_iter().filter(|(_, v)| { v.len() > 1 }).collect();
+
+    for (dep, vers) in &repeating_deps {
+        let mut version_nos : Vec<String> = vers.iter()
+            .map(|ref de| de.version.to_string())
+            .collect();
+
+        version_nos.sort();
+        version_nos.dedup();
+
+        if version_nos.len() > 1 {
+            println!("Found duplicate versions for dependency {}", dep);
+
+            for version in vers {
+                println!("{} - {}", version.project, version.version);
             }
-        }
 
-        member_dependencies.insert(member_str, deps_v);
-    }
-
-    let mut ws_deps = HashMap::new();
-
-    for (member, deps) in &member_dependencies {
-        for (dep, version) in deps {
-            ws_deps.entry(dep.to_owned()).or_insert(Vec::new());
-            ws_deps.get_mut(&dep.to_owned()).unwrap().push((member.to_owned(), version.to_owned()));
-        }
-    }
-
-    for (dep, members) in &ws_deps {
-        if members.len() > 1 {
-            println!("{} - {:?}", dep, members);
+            println!("");
         }
     }
 
