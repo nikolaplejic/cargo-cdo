@@ -46,18 +46,10 @@ fn load_toml(filename: &str) -> Result<String, std::io::Error> {
     Ok(toml_str.to_string())
 }
 
-fn main() -> std::io::Result<()> {
+fn dependency_map(workspace: &Workspace) -> DependencyMap {
     let mut dm = DependencyMap::new();
 
-    let toml_str = load_toml("Cargo.toml").expect("No Cargo.toml file found.");
-
-    let tl_workspace : CargoWorkspace = match toml::from_str(&toml_str) {
-        Ok(ws) => ws,
-        _      => panic!("Malformed Cargo.toml -- are you in a workspace?")
-    };
-    let workspace = tl_workspace.workspace;
-
-    for member in workspace.members {
+    for member in &workspace.members {
         let crate_str = load_toml(&format!("{}/Cargo.toml", member))
             .expect("No Cargo.toml file found.");
 
@@ -89,16 +81,36 @@ fn main() -> std::io::Result<()> {
         }
     }
 
+    return dm;
+}
+
+fn detect_dupes(vers: &Vec<DependencyEntry>) -> Vec<String> {
+    let mut version_nos : Vec<String> = vers.iter()
+        .map(|ref de| de.version.to_string())
+        .collect();
+
+    version_nos.sort();
+    version_nos.dedup();
+
+    return version_nos;
+}
+
+fn main() -> std::io::Result<()> {
+    let toml_str = load_toml("Cargo.toml").expect("No Cargo.toml file found.");
+
+    let tl_workspace : CargoWorkspace = match toml::from_str(&toml_str) {
+        Ok(ws) => ws,
+        _      => panic!("Malformed Cargo.toml -- are you in a workspace?")
+    };
+    let workspace = tl_workspace.workspace;
+
+    let dm = dependency_map(&workspace);
+
     let repeating_deps : DependencyMap =
         dm.into_iter().filter(|(_, v)| { v.len() > 1 }).collect();
 
     for (dep, vers) in &repeating_deps {
-        let mut version_nos : Vec<String> = vers.iter()
-            .map(|ref de| de.version.to_string())
-            .collect();
-
-        version_nos.sort();
-        version_nos.dedup();
+        let version_nos = detect_dupes(&vers);
 
         if version_nos.len() > 1 {
             println!("Found duplicate versions for dependency {}", dep);
