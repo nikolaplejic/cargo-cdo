@@ -1,0 +1,8 @@
+[workspace]
+
+members = [
+        "awesome_project",
+        "shr",
+        "core_stuff",
+        "even_more_core_stuff",
+]

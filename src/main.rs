@@ -46,11 +46,11 @@ fn load_toml(filename: &str) -> Result<String, std::io::Error> {
     Ok(toml_str.to_string())
 }
 
-fn dependency_map(workspace: &Workspace) -> DependencyMap {
+fn dependency_map(cargo_files: &Vec<String>) -> DependencyMap {
     let mut dm = DependencyMap::new();
 
-    for member in &workspace.members {
-        let crate_str = load_toml(&format!("{}/Cargo.toml", member))
+    for member in cargo_files {
+        let crate_str = load_toml(&member)
             .expect("No Cargo.toml file found.");
 
         let member_toml : CargoCrate = match toml::from_str(&crate_str) {
@@ -84,7 +84,13 @@ fn dependency_map(workspace: &Workspace) -> DependencyMap {
     return dm;
 }
 
-fn detect_dupes(vers: &Vec<DependencyEntry>) -> Vec<String> {
+fn detect_dupes(dm: DependencyMap) -> DependencyMap {
+    dm.into_iter()
+        .filter(|(_, v)| { v.len() > 1 })
+        .collect()
+}
+
+fn normalize_deps(vers: &Vec<DependencyEntry>) -> Vec<String> {
     let mut version_nos : Vec<String> = vers.iter()
         .map(|ref de| de.version.to_string())
         .collect();
@@ -104,13 +110,16 @@ fn main() -> std::io::Result<()> {
     };
     let workspace = tl_workspace.workspace;
 
-    let dm = dependency_map(&workspace);
+    let members = workspace.members
+        .into_iter()
+        .map(|m| format!("{}/Cargo.toml", m))
+        .collect();
 
-    let repeating_deps : DependencyMap =
-        dm.into_iter().filter(|(_, v)| { v.len() > 1 }).collect();
+    let dm = dependency_map(&members);
+    let repeating_deps = detect_dupes(dm);
 
     for (dep, vers) in &repeating_deps {
-        let version_nos = detect_dupes(&vers);
+        let version_nos = normalize_deps(&vers);
 
         if version_nos.len() > 1 {
             println!("Found duplicate versions for dependency {}", dep);
@@ -124,4 +133,48 @@ fn main() -> std::io::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_workspace_parsing() {
+        let workspace_str = load_toml("fixture/workspace.toml").unwrap();
+        let tl_workspace : CargoWorkspace = toml::from_str(&workspace_str).unwrap();
+
+        assert_eq!(4, tl_workspace.workspace.members.len());
+        assert_eq!("awesome_project", tl_workspace.workspace.members.first().unwrap());
+    }
+
+    #[test]
+    fn test_dependency_map() {
+        let tomls = vec![
+            "fixture/crate1.toml".to_string(),
+            "fixture/crate2.toml".to_string(),
+        ];
+        let dm = dependency_map(&tomls);
+
+        let serde = dm.get("serde").unwrap();
+        assert_eq!(2, serde.len());
+
+        let internal_project = dm.get("internal_project").unwrap();
+        assert_eq!(1, internal_project.len());
+    }
+
+    #[test]
+    fn test_dupe_detection() {
+        let tomls = vec![
+            "fixture/crate1.toml".to_string(),
+            "fixture/crate2.toml".to_string(),
+        ];
+        let dm = dependency_map(&tomls);
+
+        let repeating_deps = detect_dupes(dm);
+
+        assert!(repeating_deps.contains_key("serde"));
+        assert!(repeating_deps.contains_key("toml"));
+        assert!(!repeating_deps.contains_key("unknown_project"));
+    }
 }

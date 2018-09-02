@@ -1,0 +1,11 @@
+[package]
+name = "shr"
+version = "0.1.0"
+authors = ["Nikola Plejic <nikola@plejic.com>"]
+
+[dependencies]
+toml = "0.3"
+serde = "1.0"
+serde_derive = "1.0"
+unknown_project = "0.1.0"
+internal_project = { path = "../internal_project" }
